@@ -1,0 +1,235 @@
+import tkinter as tk
+import threading
+import socket
+import gameboard as gb
+
+
+class TicTacToeGUI:
+    """Class representing UI for Tic Tac Toe game board."""
+
+    def __init__(self):
+        """Initializes the UI for tic-tac-toe"""
+        self.port = None
+        self.address = None
+        self.player1_name = ''
+        self.player2_name = 'Player 2'
+        self.root = tk.Tk()
+        self.window()
+        self.variables()
+        self.server_socket = None
+        self.server_address = None
+        self.host_port()
+        self.game_board = None
+        self.buttons = []
+        self.run_UI()
+
+    def window(self):
+        """ Makes the window for tic-tac-toe"""
+        self.root.title('Host Tic Tac Toe')
+        self.root.geometry('600x600')
+        self.root.configure(background='white')
+        self.root.resizable(False, False)
+
+    def variables(self):
+        """creates the variables for the address, port, and name of player 1"""
+        self.address = tk.StringVar()
+        self.port = tk.IntVar()
+        self.player1_name = ""
+
+    def destroy_window(self):
+        """ Quits the window """
+        self.root.destroy()
+
+    def clear_window(self):
+        """ removes all the widgets on the window"""
+        for widget in self.root.winfo_children():
+            widget.destroy()
+
+    def host_port(self):
+        """ Connects player 1 and player 2 through sockets"""
+
+        # asks the user for the address
+        tk.Label(self.root, text='Enter the address on which to host the game').pack()
+        tk.Entry(self.root, textvariable=self.address).pack()
+
+        # asks the user for the port number
+        tk.Label(self.root, text='Enter the port on which to host the game').pack()
+        tk.Entry(self.root, textvariable=self.port).pack()
+
+        # send button to test if name is valid
+        tk.Button(self.root, text='Enter', command=self.connect).pack()
+
+    def connect(self):
+        """ Connects player 1 and player 2 and sends player 1's name"""
+
+        self.clear_window()
+
+        # Binds player 1 and player 2 through a socket
+        tk.Label(self.root, text='Waiting for another player to join...').pack()
+        address = self.address.get()
+        port = self.port.get()
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_socket.bind((str(address), int(port)))
+        self.server_socket.listen(1)
+        threading.Thread(target=self.receive_name).start()
+
+    def receive_name(self):
+        """ Receives player 1's username and initializes game board"""
+        self.server_socket, self.server_address = self.server_socket.accept()
+        self.player1_name = self.server_socket.recv(1024).decode()
+        tk.Label(self.root, text=f'Connected with {self.player1_name}').pack()
+        self.root.after(1000, self.set_up_game)
+        self.game_board = gb.BoardClass(self.player1_name, self.player2_name)
+
+    def set_up_game(self):
+        """ Creates window to play tic-tac-toe and makes the first move be done by player 1"""
+
+        self.clear_window()
+        self.game_board.resetGameBoard()
+        frame = tk.Frame(self.root)
+        frame.place(relx=.5, rely=.4, anchor=tk.CENTER)
+        button_list = []
+
+        # uses game_board.board to place buttons in a 3x3 grid
+        for row_num, row in enumerate(self.game_board.board):
+            for col_num, col in enumerate(row):
+                button_text = col if col else " "
+                button = tk.Button(frame, text=button_text, width=10, height=5)
+                button.configure(command=lambda r=row_num, c=col_num: self.make_move(r, c))
+                button.grid(row=row_num, column=col_num, sticky='nsew')
+                button_list.append(button)
+
+        # Text box to show whose turn it is
+        tk.Label(self.root, text=f"It's {self.player1_name}'s turn").place(relx=.5, rely=.65, anchor=tk.CENTER)
+
+        # rows for the buttons in the 3x3 grid
+        row1 = [button_list[0], button_list[1], button_list[2]]
+        row2 = [button_list[3], button_list[4], button_list[5]]
+        row3 = [button_list[6], button_list[7], button_list[8]]
+        self.buttons = [row1, row2, row3]
+
+        threading.Thread(target=self.recv_move).start()
+        self.game_board.last_player_turn = self.player2_name
+
+    def recv_move(self):
+        """ Receives the move from Player 1"""
+
+        # checks if game is not over
+        game_is_over = self.game_board.isWinner() or self.game_board.boardIsFull()
+        if not game_is_over:
+
+            # receives player 1's move
+            player1_move = self.server_socket.recv(1024).decode()
+            self.game_board.last_player_turn = self.player1_name
+            row, column = player1_move.split(',')
+            row = int(row)
+            column = int(column)
+
+            # Updates game board for player 2
+            self.game_board.updateGameBoard(self.player1_name, row, column)
+            self.update_game()
+            if self.game_board.isWinner() is True:
+                self.player1_win_condition()
+            elif self.game_board.boardIsFull() is True:
+                self.tie_condition()
+        else:
+            return
+
+    def make_move(self, row, col):
+        """ Player 1's move and sends it to player 2
+
+        Args:
+            row (str): The row where the move was made
+            col (str): The column where the move was made
+        """
+
+        # checks if it is player 2's move
+        if self.game_board.last_player_turn == self.player1_name:
+            self.update_game()
+
+            # player 2 makes move
+            if self.game_board.updateGameBoard(self.player2_name, row, col):
+                player2_move = str(row) + ',' + str(col)
+
+                # Player 2 sends move
+                self.server_socket.send(player2_move.encode())
+                self.game_board.last_player_turn = self.player2_name
+                self.update_game()
+
+                # checks if game is won or tied, if not it keeps running
+                if self.game_board.isWinner() is True:
+                    self.player2_win_condition()
+                elif self.game_board.boardIsFull() is True:
+                    self.tie_condition()
+                else:
+                    threading.Thread(target=self.recv_move).start()
+            else:
+                return
+
+    def update_game(self):
+        """ Updates the game board with the moves done by player 1 or player 2"""
+        self.clear_window()
+        frame = tk.Frame(self.root)
+        frame.place(relx=.5, rely=.4, anchor=tk.CENTER)
+
+        # replaces all buttons in a 3x3 grid
+        for row_num, row in enumerate(self.game_board.board):
+            for col_num, col in enumerate(row):
+                button_text = col if col else " "
+                button = tk.Button(frame, text=button_text, width=10, height=5)
+                button.configure(command=lambda r=row_num, c=col_num: self.make_move(r, c))
+                button.grid(row=row_num, column=col_num, sticky='nsew')
+
+        # Text box to show whose turn it is
+        if self.game_board.last_player_turn == self.player1_name:
+            tk.Label(self.root, text=f"It's Player 2's turn").place(relx=.5, rely=.65, anchor=tk.CENTER)
+        else:
+            tk.Label(self.root, text=f"It's {self.player1_name}'s turn").place(relx=.5, rely=.65, anchor=tk.CENTER)
+
+    def tie_condition(self):
+        """Game over screen for tie"""
+        self.clear_window()
+        tk.Label(self.root, text='Result is a tie!').pack()
+        tk.Label(self.root, text=f'Waiting for {self.player1_name} to decide to play again').pack()
+        threading.Thread(target=self.replay).start()
+
+    def player2_win_condition(self):
+        """Game over screen for player 2 wins"""
+        self.clear_window()
+        tk.Label(self.root, text='Won!').pack()
+        tk.Label(self.root, text=f'Waiting for {self.player1_name} to decide to play again').pack()
+        threading.Thread(target=self.replay).start()
+
+    def player1_win_condition(self):
+        """Game over screen for player 1 wins"""
+        self.clear_window()
+        tk.Label(self.root, text='Lost').pack()
+        tk.Label(self.root, text=f'Waiting for {self.player1_name} to decide to play again').pack()
+        self.replay()
+
+    def replay(self):
+        """replays and resets board"""
+        decision = self.server_socket.recv(1024).decode()
+        if decision == 'Yes':
+            self.set_up_game()
+        else:
+            self.stats()
+
+    def stats(self):
+        """ Displays stats of all the games played"""
+        self.clear_window()
+        tk.Label(self.root, text=f'Decided to not play again').pack()
+        tk.Label(self.root, text=f'Player 1: {self.player1_name}, Player 2: {self.player2_name}').pack()
+        tk.Label(self.root, text=f'Last player to make a move: {self.game_board.last_player_turn}').pack()
+        tk.Label(self.root, text=f'Number of games played: {self.game_board.games_played}').pack()
+        tk.Label(self.root, text=f'Number of wins: {self.game_board.num_wins}').pack()
+        tk.Label(self.root, text=f'Number of losses: {self.game_board.num_losses}').pack()
+        tk.Label(self.root, text=f'Number of ties: {self.game_board.num_ties}').pack()
+
+    def run_UI(self):
+        """ Continuously runs the GUI"""
+        self.root.mainloop()
+
+
+if __name__ == '__main__':
+    TicTacToeGUI()
